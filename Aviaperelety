@@ -1,0 +1,99 @@
+-- 1.Выведите названия самолётов, которые имеют менее 50 посадочных мест.
+
+select model as "Название самолета"
+from aircrafts a 
+left join seats s 
+on a.aircraft_code = s.aircraft_code  
+group by model 
+having count(s.seat_no) < 50
+
+
+-- 2.Выведите процентное изменение ежемесячной суммы бронирования билетов, округленной до сотых.
+
+select date_trunc('month', book_date)::date as "Дата", sum(total_amount) as "Сумма",
+round(((sum(total_amount) - lag(sum(total_amount)) over (order by date_trunc('month', book_date))) /
+lag(SUM(total_amount)) over (order by  date_trunc('month', book_date)))*100, 2) as "Процентное изменение"
+from bookings b 
+group by date_trunc('month', book_date)
+
+
+-- 3.Выведите названия самолётов без бизнес-класса. Используйте в решении функцию array_agg.
+
+SELECT a.model as "Название самолета"
+from aircrafts a 
+JOIN seats s  ON a.aircraft_code = s.aircraft_code
+GROUP BY a.model
+having array_position(array_agg(s.fare_conditions), 'Business') is null
+
+		
+-- 4.Выведите накопительный итог количества мест в самолётах по каждому аэропорту на каждый день. 
+--Учтите только те самолеты, которые летали пустыми и только те дни, когда из одного аэропорта вылетело более одного такого самолёта.
+--Выведите в результат код аэропорта, дату вылета, количество пустых мест и накопительный итог.
+
+with cte1 as ( SELECT distinct flight_id from boarding_passes ),
+cte2 as ( select aircraft_code, count(*) seats_count from seats group by aircraft_code ), 
+cte3 as ( select f.flight_id,scheduled_departure,departure_airport,aircraft_code
+          from flights  f
+          left join cte1  on f.flight_id=cte1.flight_id
+          where cte1.flight_id is null ),
+cte4 as ( select departure_airport,scheduled_departure,count(*) as fcount,sum(cte2.seats_count) as seats_count
+          from cte3 
+          left join cte2  on cte3.aircraft_code=cte2.aircraft_code
+          group by  departure_airport,scheduled_departure)
+
+select departure_airport as "Аэропорт вылета",scheduled_departure as "Дата вылета" ,seats_count as "Кол-во пустых мест", 
+sum(seats_count) over (partition by departure_airport order by scheduled_departure ) as "Накопительный итог"
+from cte4
+where fcount>1;
+
+
+-- 5.Найдите процентное соотношение перелётов по маршрутам от общего количества перелётов. 
+--Выведите в результат названия аэропортов и процентное отношение.
+--Используйте в решении оконную функцию.
+
+select distinct a.airport_name as "Аэропорт вылета", b.airport_name as "Аэропорт прилета",
+round(count(flight_id) over (partition by flight_no ) / count(flight_id) over ()::numeric *100,2) as "Процентное соотношение"
+from flights f  
+join airports a ON f.departure_airport = a.airport_code 
+join airports b ON f.arrival_airport = b.airport_code
+order by a.airport_name, b.airport_name 
+
+
+-- 6.Выведите количество пассажиров по каждому коду сотового оператора. Код оператора – это три символа после +7
+ 
+select  count(substring( (contact_data ->> 'phone')  from 3 for 3 )::int) as "Количество пассажиров", 
+substring( (contact_data ->> 'phone')  from 3 for 3 ) as "Код оператора"
+from tickets t  
+group by substring( (contact_data ->> 'phone')  from 3 for 3 )
+order by substring( (contact_data ->> 'phone')  from 3 for 3 )
+
+
+-- 7.Классифицируйте финансовые обороты (сумму стоимости перелетов) по маршрутам:
+--до 50 млн – low
+--от 50 млн включительно до 150 млн – middle
+--от 150 млн включительно – high
+--Выведите в результат количество маршрутов в каждом полученном классе.
+
+select ab.class as "Класс", count(*) as "Количество маршрутов" 
+from (select departure_airport ,arrival_airport , 
+sum(amount) as go1,
+case 
+	when sum(amount)<50000000 then 'low'
+	when 50000000 <= sum(amount) and sum(amount) < 150000000 then 'middle'	
+	when sum(amount) >= 150000000 then 'high'
+end as  class
+from ticket_flights tf
+join flights f on tf.flight_id = f.flight_id 
+group by  departure_airport ,arrival_airport) ab
+group by ab.class
+order by count(*) desc 
+
+
+
+-- 8.Вычислите медиану стоимости перелетов (amount), 
+--медиану стоимости бронирования и отношение медианы бронирования к медиане стоимости перелетов, результат округлите до сотых.
+
+select percentile_cont(0.5) within group (order by total_amount) as "Медиана перелетов",
+(select percentile_cont(0.5) within group (order by amount) from ticket_flights tf ) as "Медина броинрования",
+round((percentile_cont(0.5) within group (order by total_amount) / (select percentile_cont(0.5) within group (order by amount) from ticket_flights tf ))::numeric,2) as "Отношение"
+from bookings b 
